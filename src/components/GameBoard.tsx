@@ -94,19 +94,32 @@ export function GameBoard({ sessionLength, onSessionEnd, onHome }: Props) {
     if (!target && board.length === 4) {
       const t = board[Math.floor(Math.random() * board.length)];
       setTarget(t);
-      const delay = setTimeout(() => speakTarget(t), 350);
-      return () => clearTimeout(delay);
     }
-    // speakTarget closes over DEMO_SPEECH which is a module constant
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [board, target]);
 
-  const speakTarget = useCallback((t?: GameObject | null) => {
-    const obj = t ?? targetRef.current;
-    if (!obj) return;
-    playAudio(obj.audio_he, {
+  // Speak the Hebrew target whenever it changes. Tracking the last spoken id
+  // via a ref keeps StrictMode's double-invoke from re-speaking, and using a
+  // bare setTimeout (no cleanup) prevents the dep-change cleanup from
+  // cancelling the speech before it fires — which is what the previous
+  // useEffect did, silently breaking "speak on first shown".
+  const lastSpokenTargetIdRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (target && target.id !== lastSpokenTargetIdRef.current) {
+      lastSpokenTargetIdRef.current = target.id;
+      window.setTimeout(() => speakHebrew(target), 350);
+    }
+    // speakHebrew is stable (defined with empty-deps useCallback)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [target]);
+
+  // Speak any object's Hebrew label. Used for both the target prompt and the
+  // card the child just pressed.
+  const speakHebrew = useCallback((obj?: GameObject | null) => {
+    const o = obj ?? targetRef.current;
+    if (!o) return;
+    playAudio(o.audio_he, {
       speechFallback: DEMO_SPEECH,
-      speechText: obj.label_he,
+      speechText: o.label_he,
       speechLang: "he-IL",
     });
   }, []);
@@ -138,6 +151,11 @@ export function GameBoard({ sessionLength, onSessionEnd, onHome }: Props) {
       if (!t || !b[index]) return;
       const pressed = b[index];
 
+      // Always speak the Hebrew word of the pressed card — even on a wrong
+      // press it reinforces vocabulary ("you pressed כלב, not the target").
+      // Feedback audio is delayed below so the word can be heard first.
+      speakHebrew(pressed);
+
       if (pressed.id === t.id) {
         setLocked(true);
         setFeedback((prev) => {
@@ -152,7 +170,7 @@ export function GameBoard({ sessionLength, onSessionEnd, onHome }: Props) {
           setBestStreak((b2) => Math.max(b2, ns));
           return ns;
         });
-        speakFeedback("success");
+        setTimeout(() => speakFeedback("success"), 800);
         setShowHint(false);
 
         setTimeout(() => {
@@ -199,17 +217,18 @@ export function GameBoard({ sessionLength, onSessionEnd, onHome }: Props) {
           next[index] = "wrong";
           return next;
         });
-        setMistakes((m) => {
-          const nm = m + 1;
-          if (nm >= HINT_THRESHOLD) {
-            setShowHint(true);
-            speakFeedback("tryagain");
-            setTimeout(() => speakTarget(), 800);
-          } else {
-            speakFeedback("mistake");
-          }
-          return nm;
-        });
+        // Compute outside the state updater so StrictMode's double-invoke
+        // doesn't fire the speech / hint side effects twice in dev.
+        const nm = mistakesRef.current + 1;
+        setMistakes(nm);
+        // Delay so the just-spoken pressed-card word can finish first.
+        if (nm >= HINT_THRESHOLD) {
+          setShowHint(true);
+          setTimeout(() => speakFeedback("tryagain"), 800);
+          setTimeout(() => speakHebrew(), 1800);
+        } else {
+          setTimeout(() => speakFeedback("mistake"), 800);
+        }
         setStreak(0);
         setTotalMistakes((m) => m + 1);
         setTimeout(() => {
@@ -221,7 +240,7 @@ export function GameBoard({ sessionLength, onSessionEnd, onHome }: Props) {
         }, 700);
       }
     },
-    [pool, sessionLength, onSessionEnd, speakFeedback, speakTarget],
+    [pool, sessionLength, onSessionEnd, speakFeedback, speakHebrew],
   );
 
   // Keyboard input (dev mode). Arduino is wired up via SerialInputSource later.
@@ -250,7 +269,7 @@ export function GameBoard({ sessionLength, onSessionEnd, onHome }: Props) {
           <div className="scoreboard">
             <button
               className="speaker-btn"
-              onClick={() => speakTarget()}
+              onClick={() => speakHebrew()}
               aria-label="إعادة الاستماع"
             >
               <span aria-hidden="true">🔊</span>
